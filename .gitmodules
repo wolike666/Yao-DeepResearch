@@ -1,0 +1,6 @@
+[submodule "Deep_Research_Bench/deep_research_bench"]
+	path = Deep_Research_Bench/deep_research_bench
+	url = https://github.com/Ayanami0730/deep_research_bench.git
+[submodule "Deep_Research_Bench/DeepResearch-Bench-Dataset"]
+	path = Deep_Research_Bench/DeepResearch-Bench-Dataset
+	url = https://hf-mirror.com/datasets/muset-ai/DeepResearch-Bench-Dataset
