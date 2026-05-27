@@ -159,6 +159,25 @@ def _query_decompose_limit() -> int:
     return max(2, min(10, val))
 
 
+def _en_query_fallback_enabled() -> bool:
+    raw = (os.getenv("ENABLE_EN_QUERY_FALLBACK", "1") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _decompose_interpretation_enabled() -> bool:
+    raw = (os.getenv("ENABLE_INTERPRETATION_QUERY", "1") or "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
+
+
+def _one_en_fallback_query(question: str) -> str:
+    q = (question or "").strip()
+    if not q:
+        return ""
+    if "中产" in q or "阶层" in q:
+        return "China social stratification report interpretation middle class income wealth"
+    return f"{q} report interpretation"
+
+
 def _topic_decompose_queries(question: str, seed_queries: list[str], limit: int = 6) -> list[str]:
     q = (question or "").strip()
     seeds = dedupe_keep_order(seed_queries or [], limit=4)
@@ -182,6 +201,13 @@ def _topic_decompose_queries(question: str, seed_queries: list[str], limit: int 
             f"{topic} CHFS CFPS CGSS 调查 报告",
             f"{topic} 社科院 蓝皮书 学术论文 PDF",
         ]
+        if _decompose_interpretation_enabled():
+            templates.extend(
+                [
+                    f"{topic} 研究报告 解读 综述 摘要 核心观点",
+                    f"{topic} 原报告 找不到 替代来源 二手引用 数据口径",
+                ]
+            )
     else:
         templates = [
             f"{q} official definition statistical methodology",
@@ -193,6 +219,14 @@ def _topic_decompose_queries(question: str, seed_queries: list[str], limit: int 
         ]
 
     combined = dedupe_keep_order(seeds + templates, limit=limit)
+    if is_zh and _en_query_fallback_enabled():
+        en_q = _one_en_fallback_query(q)
+        if en_q:
+            combined = [x for x in combined if x != en_q]
+            if len(combined) >= limit:
+                combined = combined[: max(0, limit - 1)]
+            combined.append(en_q)
+            combined = dedupe_keep_order(combined, limit=limit)
     return combined
 
 
@@ -351,7 +385,7 @@ def _read_batch_workers(batch_size: int) -> int:
 
 
 def _read_all_from_search_enabled() -> bool:
-    raw = (os.getenv("READ_ALL_SEARCH_RESULTS", "1") or "1").strip().lower()
+    raw = (os.getenv("READ_ALL_SEARCH_RESULTS", "0") or "0").strip().lower()
     return raw not in {"0", "false", "no", "off"}
 
 

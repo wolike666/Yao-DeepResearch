@@ -813,8 +813,49 @@ f:/Code/LLM/.venv/Scripts/python.exe My-DeepResearch/scripts/json_answer_to_md.p
 3. 结论：
 - 这是目标站点反爬/网络可达性问题，不是 read 主流程逻辑错误。
 
+## 2026-05-22 补充记录：改回分批 read + 解读检索 + 单条英文回退
+### 需求确认
+- 用户确认：
+  1. 改回分批 read；
+  2. 原报告搜不到时，补“解读/综述”方向检索；
+  3. 中文问题可补英文关键词，但仅 1 条英文查询。
+
+### 实施改动
+1. 文件：`src/my_deepresearch/agent/orchestrator.py`
+- `READ_ALL_SEARCH_RESULTS` 默认值从 `1` 改为 `0`：
+  - 默认行为恢复为分批 read（按 `BATCH_READ_SIZE`）。
+
+2. 文件：`src/my_deepresearch/agent/orchestrator.py`
+- 新增检索开关：
+  - `ENABLE_INTERPRETATION_QUERY`（默认 `1`）
+  - `ENABLE_EN_QUERY_FALLBACK`（默认 `1`）
+- 在 `_topic_decompose_queries(...)` 中加入“原报告替代检索模板”：
+  - `研究报告 解读 综述 摘要 核心观点`
+  - `原报告 找不到 替代来源 二手引用 数据口径`
+
+3. 文件：`src/my_deepresearch/agent/orchestrator.py`
+- 新增 `_one_en_fallback_query(...)`，并在中文问题中补充英文回退查询；
+- 逻辑保证：每次最多保留 1 条英文查询（不会多条英文泛滥）。
+
+4. 文件：`.env.example`
+- 增加默认配置：
+  - `READ_ALL_SEARCH_RESULTS=0`
+  - `ENABLE_INTERPRETATION_QUERY=1`
+  - `ENABLE_EN_QUERY_FALLBACK=1`
+  - `QUERY_DECOMPOSE_MAX=6`
+
+### 验证
+1. 语法校验通过：
+- `python -m py_compile src/my_deepresearch/agent/orchestrator.py`
+2. 烟测结果：
+- search queries 中出现“解读/综述”模板；
+- 英文查询计数 `en_count=1`；
+- 默认 read 模式恢复为分批（未开启全量 read）。
+
 ### 目前问题
 有些网页读取不到内容，doc豆丁，书籍读不到pdf
-输出内容没有结构化
 
-改回分批。搜不到原报告，可以搜有没有关于报告的解读。有时候也可以改用英文关键词去搜索。怎么修改，经我确认再修改。
+
+优化了查询构造策略
+  “搜不到原报告”时自动搜“解读/综述/书评”
+  对中文问题补一组英文查询

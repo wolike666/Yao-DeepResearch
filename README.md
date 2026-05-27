@@ -1,94 +1,135 @@
 # My-DeepResearch-2
 
-面向单问题交互的 DeepResearch 框架，参考 Alibaba-NLP-DeepResearch 的执行思路做了中度对齐。
+A single-question DeepResearch framework aligned to the execution style of Alibaba-NLP-DeepResearch.
 
-## 本次对齐范围
+This project focuses on an iterative research loop:
+`plan -> search -> read -> reflect -> synthesize`
 
-1. 模块拆分：核心循环由单体 engine 拆分为 state、planner、reflector、orchestrator。
-2. 工具体系：保留 web search、web read、scholar search 三类工具。
-3. 接口模式：继续使用 OpenAI 兼容接口。
-4. 运行方式：只做单问题交互，不包含评测链路。
-5. 输出策略：主输出为 answer，同时保留 answer_tagged 便于调试。
-6. 配置复用：可直接复用 Alibaba 项目的 .env 与密钥字段。
+## Highlights
 
-## 目录结构
+- Single-question interactive research pipeline
+- OpenAI-compatible model interface
+- Web search + scholar search + web reading toolchain
+- Batched read with configurable concurrency
+- Citation catalog + inline citation normalization
+- Benchmark-friendly JSON output format
 
-- main.py: 兼容入口（单问题）
-- scripts/run_single_research_windows.py: Windows 单问题运行脚本（对齐 Alibaba 风格）
-- src/my_deepresearch/config.py: 配置读取与字段兼容
-- src/my_deepresearch/engine.py: 兼容层，转发到 orchestrator
-- src/my_deepresearch/agent/state.py: 研究状态数据结构
-- src/my_deepresearch/agent/planner.py: 规划提示与状态压缩
-- src/my_deepresearch/agent/reflector.py: 反思阶段逻辑
-- src/my_deepresearch/agent/orchestrator.py: 主循环编排
-- src/my_deepresearch/tools/search_tool.py: Web 搜索（Serper/DDGS）
-- src/my_deepresearch/tools/scholar_tool.py: Scholar 搜索（Serper Scholar）
-- src/my_deepresearch/tools/fetch_tool.py: 网页读取（Jina/requests+bs4）
+## Project Structure
 
-## 快速开始
+- `main.py`: CLI entry for one research question
+- `scripts/run_single_research_windows.py`: Windows-friendly single-run script
+- `src/my_deepresearch/config.py`: environment/config loading with fallback fields
+- `src/my_deepresearch/engine.py`: compatibility wrapper
+- `src/my_deepresearch/agent/`: state/planner/reflector/orchestrator
+- `src/my_deepresearch/tools/search_tool.py`: web search
+- `src/my_deepresearch/tools/scholar_tool.py`: scholar search
+- `src/my_deepresearch/tools/fetch_tool.py`: page reading (Jina + requests/bs4 + fallbacks)
+- `scripts/json_answer_to_md.py`: export JSON answer to Markdown
+- `Deep_Research_Bench/`: benchmark and dataset submodules
 
-1. 安装依赖
+## Quick Start
+
+1. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. 配置环境变量
+2. Create env file
 
 ```bash
 copy .env.example .env
 ```
 
-3. 运行单问题
+3. Fill required keys in `.env` (model key is required; search/read keys are recommended)
+
+4. Run one question
 
 ```bash
-python main.py --question "2026年佛山大学有几项成果获评广东省高校党建研究优秀成果奖？"
+python main.py --question "Help me research the current state of China's middle class"
 ```
 
-或使用对齐脚本：
+or
 
 ```bash
-python scripts/run_single_research_windows.py --question "帮我调研DeepResearch"
+python scripts/run_single_research_windows.py --question "Help me research DeepResearch frameworks"
 ```
 
-## 环境变量说明
+## Key Environment Variables
 
-优先读取字段：
+Model (priority):
 
-- OPENAI_API_KEY
-- OPENAI_BASE_URL
-- OPENAI_MODEL
+- `OPENAI_API_KEY`
+- `OPENAI_BASE_URL`
+- `OPENAI_MODEL`
 
-回退读取字段（兼容 Alibaba 配置）：
+Fallback model fields (Alibaba-compatible):
 
-- API_KEY
-- API_BASE
-- INFER_MODEL_NAME
-- MODEL_PATH
+- `API_KEY`
+- `API_BASE`
+- `INFER_MODEL_NAME`
+- `MODEL_PATH`
 
-工具密钥：
+Tool keys:
 
-- SERPER_KEY_ID
-- JINA_API_KEYS
+- `SERPER_KEY_ID`
+- `JINA_API_KEYS`
 
-可选复用 Alibaba 项目 .env：
+Optional shared env:
 
-- ALIBABA_ENV_PATH=F:/Code/LLM/Alibaba-NLP-DeepResearch/.env
+- `ALIBABA_ENV_PATH=F:/Code/LLM/Alibaba-NLP-DeepResearch/.env`
 
-## 输出说明
+Research controls:
 
-每次运行会生成 outputs/result_YYYYMMDD_HHMMSS.json，主要字段：
+- `COST_MODE=low|standard|high`
+- `MAX_STEPS`
+- `MAX_SEARCH_RESULTS`
+- `MAX_PAGE_CHARS`
+- `MAX_SCHOLAR_RESULTS`
+- `SEARCH_MODE=web|scholar|hybrid`
+- `SOURCE_POLICY=balanced|strict`
 
-- question: 原问题
-- answer: 最终答案正文
-- answer_tagged: 带 think/answer 标签的完整内容
-- steps: 每轮动作日志
-- notes: 网页摘要与异常记录
-- sources: 去重后的来源
-- reflections: 每轮反思结果
+Read and query strategy:
 
-## 已知边界
+- `READ_ALL_SEARCH_RESULTS=0` (default batched read)
+- `ENABLE_INTERPRETATION_QUERY=1` (allow interpretation-summary queries)
+- `ENABLE_EN_QUERY_FALLBACK=1` (append one English fallback query)
+- `QUERY_DECOMPOSE_MAX=6`
 
-1. 仅支持单问题流程，不包含批量评测脚本。
-2. 某些页面存在反爬限制，read 阶段可能失败。
-3. 当前未接入文件解析工具（PDF/Office），后续可扩展。
+## Output
+
+Each run writes a JSON file to `outputs/`, for example:
+
+- `outputs/result_YYYYMMDD_HHMMSS.json`
+
+Main fields:
+
+- `prompt` / `question`
+- `answer`
+- `answer_tagged`
+- `article`
+- `steps`
+- `notes`
+- `sources`
+- `read_sources`
+- `reflections`
+
+## Submodules
+
+This repository includes benchmark/data submodules under `Deep_Research_Bench/`.
+
+After clone:
+
+```bash
+git submodule update --init --recursive
+```
+
+## Known Limitations
+
+1. The framework is optimized for single-question workflow, not full production serving.
+2. Some websites may block automated readers (anti-bot, auth gate, or network restrictions).
+3. Read success does not always mean high-value evidence; extraction quality still depends on model judgment.
+
+## License
+
+Please follow the license terms of this repository and each included submodule/dataset source.

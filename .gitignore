@@ -4,3 +4,7 @@ __pycache__/
 outputs/
 log/
 .env
+.idea/
+.vscode/
+*.log
+.pytest_cache/
