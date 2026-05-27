@@ -1,85 +1,84 @@
-# My-DeepResearch-2
+# Yao-DeepResearch
 
-A single-question DeepResearch framework aligned to the execution style of Alibaba-NLP-DeepResearch.
+一个面向单问题交互的 DeepResearch 框架，整体流程对齐 Alibaba-NLP-DeepResearch 的执行风格。
 
-This project focuses on an iterative research loop:
+核心流程：
 `plan -> search -> read -> reflect -> synthesize`
 
-## Highlights
+## 项目特点
 
-- Single-question interactive research pipeline
-- OpenAI-compatible model interface
-- Web search + scholar search + web reading toolchain
-- Batched read with configurable concurrency
-- Citation catalog + inline citation normalization
-- Benchmark-friendly JSON output format
+- 支持单问题交互式研究
+- 兼容 OpenAI 接口
+- 集成网页搜索、学术搜索、网页阅读
+- `read` 支持分批并发抓取
+- 支持来源聚合、引用归一化、正文内联引用
+- 输出兼容 DeepResearch-Bench 风格的 JSON 结果
 
-## Project Structure
+## 目录结构
 
-- `main.py`: CLI entry for one research question
-- `scripts/run_single_research_windows.py`: Windows-friendly single-run script
-- `src/my_deepresearch/config.py`: environment/config loading with fallback fields
-- `src/my_deepresearch/engine.py`: compatibility wrapper
-- `src/my_deepresearch/agent/`: state/planner/reflector/orchestrator
-- `src/my_deepresearch/tools/search_tool.py`: web search
-- `src/my_deepresearch/tools/scholar_tool.py`: scholar search
-- `src/my_deepresearch/tools/fetch_tool.py`: page reading (Jina + requests/bs4 + fallbacks)
-- `scripts/json_answer_to_md.py`: export JSON answer to Markdown
-- `Deep_Research_Bench/`: benchmark and dataset submodules
+- `main.py`：单问题 CLI 入口
+- `scripts/run_single_research_windows.py`：Windows 单次运行脚本
+- `src/my_deepresearch/config.py`：配置读取与环境变量兼容
+- `src/my_deepresearch/engine.py`：兼容层入口
+- `src/my_deepresearch/agent/`：状态、规划、反思、主循环
+- `src/my_deepresearch/tools/search_tool.py`：网页搜索
+- `src/my_deepresearch/tools/scholar_tool.py`：学术搜索
+- `src/my_deepresearch/tools/fetch_tool.py`：网页抓取与阅读（Jina + requests/bs4 + fallback）
+- `scripts/json_answer_to_md.py`：JSON 转 Markdown
+- `Deep_Research_Bench/`：基准测试与数据子模块
 
-## Quick Start
+## 快速开始
 
-1. Install dependencies
+1. 安装依赖
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Create env file
+2. 复制环境文件
 
 ```bash
 copy .env.example .env
 ```
 
-3. Fill required keys in `.env` (model key is required; search/read keys are recommended)
+3. 配置 `.env`
 
-4. Run one question
+至少需要模型相关配置；搜索和阅读相关 key 建议一并配置。
 
-```bash
-python main.py --question "Help me research the current state of China's middle class"
-```
-
-or
+4. 运行单问题
 
 ```bash
-python scripts/run_single_research_windows.py --question "Help me research DeepResearch frameworks"
+python main.py --question "帮我调研中国中产阶层现状"
 ```
 
-## Key Environment Variables
+或者：
 
-Model (priority):
+```bash
+python scripts/run_single_research_windows.py --question "帮我调研 DeepResearch 框架"
+```
+
+## 环境变量
+
+模型优先项：
 
 - `OPENAI_API_KEY`
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 
-Fallback model fields (Alibaba-compatible):
+兼容 Alibaba 的回退字段：
 
 - `API_KEY`
 - `API_BASE`
 - `INFER_MODEL_NAME`
 - `MODEL_PATH`
 
-Tool keys:
+工具密钥：
 
 - `SERPER_KEY_ID`
 - `JINA_API_KEYS`
 
-Optional shared env:
 
-- `ALIBABA_ENV_PATH=F:/Code/LLM/Alibaba-NLP-DeepResearch/.env`
-
-Research controls:
+研究参数：
 
 - `COST_MODE=low|standard|high`
 - `MAX_STEPS`
@@ -89,20 +88,20 @@ Research controls:
 - `SEARCH_MODE=web|scholar|hybrid`
 - `SOURCE_POLICY=balanced|strict`
 
-Read and query strategy:
+阅读与查询策略：
 
-- `READ_ALL_SEARCH_RESULTS=0` (default batched read)
-- `ENABLE_INTERPRETATION_QUERY=1` (allow interpretation-summary queries)
-- `ENABLE_EN_QUERY_FALLBACK=1` (append one English fallback query)
+- `READ_ALL_SEARCH_RESULTS=0`：默认分批阅读
+- `ENABLE_INTERPRETATION_QUERY=1`：允许补充“解读/综述”类查询
+- `ENABLE_EN_QUERY_FALLBACK=1`：对中文问题附加 1 条英文回退查询
 - `QUERY_DECOMPOSE_MAX=6`
 
-## Output
+## 输出说明
 
-Each run writes a JSON file to `outputs/`, for example:
+每次运行会在 `outputs/` 下生成一个 JSON 文件，例如：
 
 - `outputs/result_YYYYMMDD_HHMMSS.json`
 
-Main fields:
+主要字段：
 
 - `prompt` / `question`
 - `answer`
@@ -114,22 +113,22 @@ Main fields:
 - `read_sources`
 - `reflections`
 
-## Submodules
+## 子模块
 
-This repository includes benchmark/data submodules under `Deep_Research_Bench/`.
+仓库包含 `Deep_Research_Bench/` 下的基准与数据子模块。
 
-After clone:
+克隆后执行：
 
 ```bash
 git submodule update --init --recursive
 ```
 
-## Known Limitations
+## 已知限制
 
-1. The framework is optimized for single-question workflow, not full production serving.
-2. Some websites may block automated readers (anti-bot, auth gate, or network restrictions).
-3. Read success does not always mean high-value evidence; extraction quality still depends on model judgment.
+1. 当前框架主要面向单问题研究，不是完整的生产级服务。
+2. 部分网站可能有反爬、权限或网络限制，导致阅读失败。
+3. 读取成功不等于高质量证据，证据抽取仍依赖模型判断。
 
-## License
+## 许可
 
-Please follow the license terms of this repository and each included submodule/dataset source.
+请遵守本仓库及各子模块/数据来源对应的许可协议。
