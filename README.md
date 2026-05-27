@@ -65,12 +65,6 @@ python scripts/run_single_research_windows.py --question "帮我调研 DeepResea
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 
-兼容 Alibaba 的回退字段：
-
-- `API_KEY`
-- `API_BASE`
-- `INFER_MODEL_NAME`
-- `MODEL_PATH`
 
 工具密钥：
 
