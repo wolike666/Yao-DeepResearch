@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -47,6 +50,10 @@ def _load_shared_env() -> None:
 _load_shared_env()
 
 
+_JINA_NO_KEY_LOCK = threading.Lock()
+_JINA_NO_KEY_REQ_TIMES: deque[float] = deque()
+
+
 def _is_error_like_text(text: str) -> bool:
     content = (text or "").strip()
     if not content:
@@ -63,20 +70,72 @@ def _is_error_like_text(text: str) -> bool:
     return any(m in lowered or m in content for m in markers)
 
 
-def _fetch_via_jina(url: str, max_chars: int) -> str:
-    key = os.getenv("JINA_API_KEYS", "").strip().strip("\"'")
-    if not key:
-        return ""
+def _jina_no_key_rpm() -> int:
+    raw = (os.getenv("JINA_NO_KEY_RPM", "20") or "20").strip()
+    try:
+        rpm = int(raw)
+    except Exception:
+        rpm = 20
+    return max(1, min(120, rpm))
 
+
+def _wait_for_jina_no_key_slot() -> None:
+    rpm = _jina_no_key_rpm()
+    window_seconds = 60.0
+    min_interval = window_seconds / float(rpm)
+    while True:
+        with _JINA_NO_KEY_LOCK:
+            now = time.monotonic()
+            while _JINA_NO_KEY_REQ_TIMES and now - _JINA_NO_KEY_REQ_TIMES[0] >= window_seconds:
+                _JINA_NO_KEY_REQ_TIMES.popleft()
+
+            if len(_JINA_NO_KEY_REQ_TIMES) < rpm:
+                if _JINA_NO_KEY_REQ_TIMES:
+                    elapsed = now - _JINA_NO_KEY_REQ_TIMES[-1]
+                    if elapsed < min_interval:
+                        wait_seconds = min_interval - elapsed
+                    else:
+                        _JINA_NO_KEY_REQ_TIMES.append(now)
+                        return
+                else:
+                    _JINA_NO_KEY_REQ_TIMES.append(now)
+                    return
+            else:
+                wait_seconds = window_seconds - (now - _JINA_NO_KEY_REQ_TIMES[0])
+
+        time.sleep(max(0.05, wait_seconds))
+
+
+def _fetch_via_jina_once(url: str, max_chars: int, key: str | None) -> str:
     jina_url = f"https://r.jina.ai/{url}"
-    headers = {"Authorization": f"Bearer {key}"}
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    if not key:
+        _wait_for_jina_no_key_slot()
     resp = requests.get(jina_url, headers=headers, timeout=30)
     resp.raise_for_status()
-
     text = (resp.text or "").strip()
     if _is_error_like_text(text):
         return ""
     return text[:max_chars]
+
+
+def _fetch_via_jina(url: str, max_chars: int) -> str:
+    key = os.getenv("JINA_API_KEYS", "").strip().strip("\"'")
+    if key:
+        try:
+            return _fetch_via_jina_once(url=url, max_chars=max_chars, key=key)
+        except requests.HTTPError as exc:
+            status = getattr(exc.response, "status_code", None)
+            # Paid key may fail due to balance/auth issues; fall back to no-key path.
+            if status not in {401, 402, 403, 429}:
+                return ""
+        except Exception:
+            return ""
+
+    try:
+        return _fetch_via_jina_once(url=url, max_chars=max_chars, key=None)
+    except Exception:
+        return ""
 
 
 def _extract_title_from_jina_text(text: str) -> str:
@@ -119,6 +178,56 @@ def _clean_title(title: str) -> str:
     return text[:200]
 
 
+def _looks_mojibake(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return False
+    markers = ["Ã", "Â", "æ", "ç", "ð", "�", "¤", "€", "™", "œ"]
+    if any(m in t for m in markers):
+        return True
+    latin1 = sum(1 for ch in t if "\u00c0" <= ch <= "\u00ff")
+    cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff")
+    return latin1 >= 3 and cjk == 0
+
+
+def _recover_title_from_text(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    for prefix in ("Title:", "TITLE:", "标题:", "標題:"):
+        if raw.startswith(prefix):
+            raw = raw.split(":", 1)[1].strip()
+            break
+    raw = _clean_title(raw)
+    if _looks_mojibake(raw):
+        return ""
+    return raw
+
+
+def _extract_title_from_html(resp_text: str, soup: BeautifulSoup) -> str:
+    candidates: list[str] = []
+    if soup.title and soup.title.string:
+        candidates.append(_clean_title(soup.title.string))
+
+    for meta_name in ("og:title", "twitter:title", "title"):
+        tag = soup.find("meta", attrs={"property": meta_name}) or soup.find(
+            "meta", attrs={"name": meta_name}
+        )
+        if tag and tag.get("content"):
+            candidates.append(_clean_title(tag.get("content")))
+
+    head_lines = [ln.strip() for ln in (resp_text or "").splitlines()[:20] if ln.strip()]
+    for ln in head_lines:
+        if ln.lower().startswith("title:") or ln.startswith("标题:") or ln.startswith("標題:"):
+            candidates.append(_recover_title_from_text(ln))
+
+    for cand in candidates:
+        cand = _recover_title_from_text(cand)
+        if cand:
+            return cand
+    return ""
+
+
 def _fetch_via_requests_bs4(url: str, max_chars: int) -> tuple[str, str]:
     resp = requests.get(url, headers=HEADERS, timeout=20)
     resp.raise_for_status()
@@ -131,9 +240,7 @@ def _fetch_via_requests_bs4(url: str, max_chars: int) -> tuple[str, str]:
         raise ValueError("PDF fetched but text extraction returned empty")
 
     soup = BeautifulSoup(resp.text, "html.parser")
-    page_title = ""
-    if soup.title and soup.title.string:
-        page_title = _clean_title(soup.title.string)
+    page_title = _extract_title_from_html(resp.text, soup)
     for tag in soup(["script", "style", "noscript"]):
         tag.extract()
 
@@ -162,9 +269,7 @@ def _fetch_zhihu_with_mobile_headers(url: str, max_chars: int) -> tuple[str, str
     resp = requests.get(url, headers=MOBILE_HEADERS, timeout=25, allow_redirects=True)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
-    title = ""
-    if soup.title and soup.title.string:
-        title = _clean_title(soup.title.string)
+    title = _extract_title_from_html(resp.text, soup)
     for tag in soup(["script", "style", "noscript"]):
         tag.extract()
     text = "\n".join(line.strip() for line in soup.get_text("\n").splitlines() if line.strip())
@@ -231,9 +336,12 @@ def fetch_page_bundle(url: str, max_chars: int = 8000) -> dict:
     try:
         text = _fetch_via_jina(url, max_chars=max_chars)
         if text:
+            title = _recover_title_from_text(_extract_title_from_jina_text(text))
+            if not title:
+                title = _clean_title(_extract_title_from_html(text, BeautifulSoup(text, "html.parser")))
             return {
                 "text": text,
-                "title": _clean_title(_extract_title_from_jina_text(text)),
+                "title": title,
                 "source": "jina",
             }
     except Exception:

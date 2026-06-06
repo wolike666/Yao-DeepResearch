@@ -24,6 +24,7 @@ from .utils import (
     looks_academic_question,
     merge_sources,
     pick_unvisited_url,
+    _sanitize_ref_title,
 )
 
 
@@ -32,6 +33,15 @@ def _find_source_meta(sources: list[dict], url: str) -> dict:
         if (item.get("url") or "").strip() == url:
             return item
     return {}
+
+
+def _best_source_title(url: str, page_title: str, source_meta: dict, summary: str = "") -> str:
+    return _sanitize_ref_title(
+        page_title or (source_meta.get("title") or "").strip(),
+        url=url,
+        snippet=(source_meta.get("snippet") or "").strip(),
+        summary=summary,
+    )
 
 
 def _summarize_page(llm: LLMClient, question: str, url: str, page_text: str) -> str:
@@ -703,6 +713,7 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
                     current_fetch_ok = False
                     current_evidence_ok = False
                     current_read_ok = False
+                    chosen_title = ""
 
                     page_bundle = page_bundle_map.get(url) or {}
                     page_text = str(page_bundle.get("text") or "").strip()
@@ -739,16 +750,19 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
                         if current_evidence_ok:
                             evidence_ok_count += 1
                         current_read_ok = current_fetch_ok and current_evidence_ok
+                        chosen_title = _best_source_title(
+                            url=url,
+                            page_title=page_title,
+                            source_meta=source_meta,
+                            summary=current_note,
+                        )
 
                         # Relaxed citation pool gate: fetch_ok=True is enough to enter read_sources.
                         if not any((item.get("url") or "") == url for item in state.read_sources):
                             state.read_sources.append(
                                 {
                                     "url": url,
-                                    "title": (
-                                        page_title
-                                        or (source_meta.get("title") or "").strip()
-                                    ),
+                                    "title": chosen_title,
                                     "snippet": (source_meta.get("snippet") or "").strip(),
                                     "summary": current_note,
                                     "fetch_ok": True,
@@ -762,10 +776,7 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
                                 state.evidence.append(
                                     {
                                         "url": url,
-                                        "title": (
-                                            page_title
-                                            or (source_meta.get("title") or "").strip()
-                                        ),
+                                        "title": chosen_title,
                                         "snippet": (source_meta.get("snippet") or "").strip(),
                                         "summary": current_note,
                                     }

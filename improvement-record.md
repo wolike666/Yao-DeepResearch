@@ -844,6 +844,9 @@ f:/Code/LLM/.venv/Scripts/python.exe My-DeepResearch/scripts/json_answer_to_md.p
   - `ENABLE_EN_QUERY_FALLBACK=1`
   - `QUERY_DECOMPOSE_MAX=6`
 
+参考文献来源池改为仅 evidence + read_sources，不再混入未 read 的 sources（所以“没读成功也进参考文献”这个问题已修）。
+read 阶段写入 read_sources/evidence 时就先做标题清洗，避免坏标题进入后续流程。
+
 ### 验证
 1. 语法校验通过：
 - `python -m py_compile src/my_deepresearch/agent/orchestrator.py`

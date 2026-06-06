@@ -73,6 +73,17 @@ def _merge_reference_items(
     return merged
 
 
+def _looks_like_url_title(text: str) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return False
+    return bool(
+        re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,6}(/.*)?", t)
+        or re.fullmatch(r"https?://[^\s]+", t)
+        or re.fullmatch(r"[a-z0-9.-]+(/[a-z0-9._~%-]+)+", t)
+    )
+
+
 def _looks_mojibake_title(text: str) -> bool:
     t = (text or "").strip()
     if not t:
@@ -84,6 +95,34 @@ def _looks_mojibake_title(text: str) -> bool:
     latin1 = sum(1 for ch in t if "\u00c0" <= ch <= "\u00ff")
     cjk = sum(1 for ch in t if "\u4e00" <= ch <= "\u9fff")
     return latin1 >= 3 and cjk == 0
+
+
+def _repair_mojibake_utf8_latin1(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    try:
+        fixed = raw.encode("latin-1", errors="strict").decode("utf-8", errors="strict").strip()
+    except Exception:
+        return raw
+    if not fixed:
+        return raw
+    # Keep repaired text only when it is clearly better.
+    if _looks_mojibake_title(raw) and not _looks_mojibake_title(fixed):
+        return fixed
+    return raw
+
+
+def _recover_title_from_jina_title(text: str) -> str:
+    raw = _repair_mojibake_utf8_latin1((text or "").strip())
+    if not raw:
+        return ""
+    # Jina titles are often returned as "Title: xxx" or "标题: xxx".
+    for prefix in ("Title:", "TITLE:", "标题:", "標題:"):
+        if raw.startswith(prefix):
+            raw = raw.split(":", 1)[1].strip()
+            break
+    return raw
 
 
 def _fallback_title_from_url(url: str) -> str:
@@ -104,7 +143,7 @@ def _fallback_title_from_url(url: str) -> str:
 
 
 def _sanitize_ref_title(raw_title: str, url: str, snippet: str = "", summary: str = "") -> str:
-    title = (raw_title or "").strip()
+    title = _recover_title_from_jina_title(raw_title)
     title = re.sub(r"\s+", " ", title)
     title = title.replace("…", "").replace("...", "").strip(" -:：")
     if title.startswith("[PDF]"):
@@ -115,9 +154,17 @@ def _sanitize_ref_title(raw_title: str, url: str, snippet: str = "", summary: st
         or title.lower() == "source"
         or len(title) < 4
         or _looks_mojibake_title(title)
+        or _looks_like_url_title(title)
         or bool(re.fullmatch(r"[A-Za-z0-9_\-]{6,}", title))
     )
     if is_bad:
+        # Prefer snippet/summary as a fallback only when the page title is unusable.
+        for candidate in (snippet, summary):
+            c = _recover_title_from_jina_title(candidate)
+            c = re.sub(r"\s+", " ", (c or "").strip())
+            c = c.replace("…", "").replace("...", "").strip(" -:：")
+            if len(c) >= 8 and not _looks_mojibake_title(c) and not _looks_like_url_title(c):
+                return c[:180]
         for candidate in (snippet, summary):
             c = re.sub(r"\s+", " ", (candidate or "").strip())
             c = c.replace("…", "").replace("...", "").strip(" -:：")
@@ -134,7 +181,19 @@ def build_citation_catalog(
     limit: int = 20,
 ) -> list[dict]:
     catalog: list[dict] = []
-    for idx, item in enumerate(_merge_reference_items(evidence, read_sources, sources), start=1):
+    merged = []
+    seen_urls: set[str] = set()
+    for group in (evidence or [], read_sources or []):
+        for item in group:
+            url = (item.get("url") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            merged.append(item)
+    if not merged:
+        return catalog
+
+    for idx, item in enumerate(merged, start=1):
         url = (item.get("url") or "").strip()
         if not url:
             continue
