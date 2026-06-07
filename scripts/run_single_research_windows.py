@@ -94,6 +94,19 @@ def main() -> None:
 
     print("\n===== Final Answer =====")
     print(result.get("answer", ""))
+    token_usage = result.get("token_usage") or {}
+    totals = token_usage.get("totals") or {}
+    if totals:
+        source_counts = token_usage.get("sources") or {}
+        print(
+            "\n===== Token Usage =====\n"
+            f"calls={totals.get('call_count', 0)} "
+            f"prompt={totals.get('prompt_tokens', 0)} "
+            f"completion={totals.get('completion_tokens', 0)} "
+            f"total={totals.get('total_tokens', 0)} "
+            f"(official={source_counts.get('official_call_count', 0)}, "
+            f"estimated={source_counts.get('estimated_call_count', 0)})"
+        )
     print(f"\nSaved to: {result_path}")
 
 

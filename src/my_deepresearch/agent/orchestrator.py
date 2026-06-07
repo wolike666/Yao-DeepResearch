@@ -24,6 +24,7 @@ from .utils import (
     looks_academic_question,
     merge_sources,
     pick_unvisited_url,
+    record_llm_usage,
     _sanitize_ref_title,
 )
 
@@ -44,7 +45,14 @@ def _best_source_title(url: str, page_title: str, source_meta: dict, summary: st
     )
 
 
-def _summarize_page(llm: LLMClient, question: str, url: str, page_text: str) -> str:
+def _summarize_page(
+    llm: LLMClient,
+    state: ResearchState,
+    step_id: int,
+    question: str,
+    url: str,
+    page_text: str,
+) -> str:
     user_prompt = (
         f"Question: {question}\n"
         f"URL: {url}\n"
@@ -55,10 +63,23 @@ def _summarize_page(llm: LLMClient, question: str, url: str, page_text: str) -> 
         "If page is irrelevant, explicitly say no useful information.\n\n"
         f"Page content:\n{page_text}"
     )
-    return llm.chat(EXTRACTOR_SYSTEM_PROMPT, user_prompt)
+    response = llm.chat(
+        EXTRACTOR_SYSTEM_PROMPT,
+        user_prompt,
+        usage_context={"purpose": "extractor", "step": step_id},
+    )
+    record_llm_usage(state, response["usage"])
+    return response["content"]
 
 
-def _extract_page_evidence(llm: LLMClient, question: str, url: str, page_text: str) -> dict:
+def _extract_page_evidence(
+    llm: LLMClient,
+    state: ResearchState,
+    step_id: int,
+    question: str,
+    url: str,
+    page_text: str,
+) -> dict:
     user_prompt = (
         f"Question: {question}\n"
         f"URL: {url}\n"
@@ -77,7 +98,13 @@ def _extract_page_evidence(llm: LLMClient, question: str, url: str, page_text: s
         f"Page content:\n{page_text}"
     )
     try:
-        raw = llm.chat(EXTRACTOR_SYSTEM_PROMPT, user_prompt)
+        response = llm.chat(
+            EXTRACTOR_SYSTEM_PROMPT,
+            user_prompt,
+            usage_context={"purpose": "extractor", "step": step_id},
+        )
+        record_llm_usage(state, response["usage"])
+        raw = response["content"]
     except Exception as exc:
         return _heuristic_extract_page_evidence(question, page_text, reason=f"extractor_call_failed: {exc}")
     try:
@@ -405,11 +432,22 @@ def _dequeue_next_urls(state: ResearchState, preferred_url: str, batch_size: int
     if first:
         picked.append(first)
     while len(picked) < batch_size:
-        nxt = _dequeue_next_url(state, "")
+        nxt = ""
+        while state.pending_read_urls:
+            candidate = state.pending_read_urls.pop(0).strip()
+            if candidate and candidate not in state.tried_urls and candidate not in picked:
+                nxt = candidate
+                break
+        if not nxt:
+            nxt = pick_unvisited_url(
+                state.sources,
+                state.tried_urls.union(set(picked)),
+                source_policy="balanced",
+            )
         if not nxt:
             break
         if nxt in picked:
-            continue
+            break
         picked.append(nxt)
     return picked
 
@@ -461,7 +499,7 @@ def _fetch_many_pages(
     return page_bundle_by_url, fetch_errors
 
 
-def _synthesize_answer(llm: LLMClient, state: ResearchState) -> str:
+def _synthesize_answer(llm: LLMClient, state: ResearchState, step_id: int | None = None) -> str:
     import json
     citation_catalog = build_citation_catalog(
         state.evidence,
@@ -499,7 +537,13 @@ def _synthesize_answer(llm: LLMClient, state: ResearchState) -> str:
         f"Read Sources:\n{json.dumps(state.read_sources, ensure_ascii=False, indent=2)}\n\n"
         f"Sources:\n{json.dumps(state.sources, ensure_ascii=False, indent=2)}"
     )
-    return llm.chat(SYNTHESIZE_SYSTEM_PROMPT, user_prompt)
+    response = llm.chat(
+        SYNTHESIZE_SYSTEM_PROMPT,
+        user_prompt,
+        usage_context={"purpose": "synthesizer", "step": step_id},
+    )
+    record_llm_usage(state, response["usage"])
+    return response["content"]
 
 
 def run_research(question: str, settings: Settings, verbose: bool = True) -> dict:
@@ -511,7 +555,13 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
     state = ResearchState(question=question)
 
     for step_id in range(1, settings.max_steps + 1):
-        planner_raw = llm.chat(PLANNER_SYSTEM_PROMPT, planner_user_prompt(state))
+        planner_response = llm.chat(
+            PLANNER_SYSTEM_PROMPT,
+            planner_user_prompt(state),
+            usage_context={"purpose": "planner", "step": step_id},
+        )
+        record_llm_usage(state, planner_response["usage"])
+        planner_raw = planner_response["content"]
         plan = extract_json_block(planner_raw)
 
         action = (plan.get("action") or "").strip().lower()
@@ -723,7 +773,7 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
 
                     if current_fetch_ok:
                         fetch_ok_count += 1
-                        extracted = _extract_page_evidence(llm, state.question, url, page_text)
+                        extracted = _extract_page_evidence(llm, state, step_id, state.question, url, page_text)
                         summary = extracted.get("summary", "")
                         reason = extracted.get("reason", "")
                         key_facts = extracted.get("key_facts", [])
@@ -739,7 +789,7 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
                         if reason:
                             note_lines.append(f"Reason: {reason}")
                         current_note = "\n".join(note_lines).strip() or _summarize_page(
-                            llm, state.question, url, page_text
+                            llm, state, step_id, state.question, url, page_text
                         )
 
                         current_evidence_ok = (
@@ -844,7 +894,7 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
                 print("  reflect-only step.")
 
         elif action == "synthesize":
-            draft = _synthesize_answer(llm, state)
+            draft = _synthesize_answer(llm, state, step_id)
             state.draft_answer = ensure_answer_tagged(draft)
             step_log["draft"] = state.draft_answer
             observation = "draft answer updated"
@@ -853,8 +903,14 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
 
         elif action == "finish":
             if not state.draft_answer:
-                state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state))
+                state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state, step_id))
             step_log["note"] = "planner decided to finish"
+            step_log["token_usage"] = state.token_usage.get("by_step", {}).get(str(step_id), {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "call_count": 0,
+            })
             state.steps.append(step_log)
             return build_result_payload(state)
 
@@ -885,13 +941,26 @@ def run_research(question: str, settings: Settings, verbose: bool = True) -> dic
 
         if bool(plan.get("finish_if_done")) and state.confidence >= 0.8:
             if not state.draft_answer:
-                state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state))
+                state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state, step_id))
+            step_log["token_usage"] = state.token_usage.get("by_step", {}).get(str(step_id), {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "call_count": 0,
+            })
             state.steps.append(step_log)
             return build_result_payload(state)
 
+        step_log["token_usage"] = state.token_usage.get("by_step", {}).get(str(step_id), {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "call_count": 0,
+        })
         state.steps.append(step_log)
 
     if not state.draft_answer:
-        state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state))
+        final_step_id = len(state.steps) + 1
+        state.draft_answer = ensure_answer_tagged(_synthesize_answer(llm, state, final_step_id))
 
     return build_result_payload(state)

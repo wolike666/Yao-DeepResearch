@@ -521,6 +521,70 @@ def looks_academic_question(text: str) -> bool:
     return any(token in lowered for token in keywords)
 
 
+def _empty_usage_bucket() -> dict:
+    return {
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "call_count": 0,
+    }
+
+
+def record_llm_usage(state: Any, usage: dict | None) -> None:
+    if not usage:
+        return
+
+    prompt_tokens = int(usage.get("prompt_tokens") or 0)
+    completion_tokens = int(usage.get("completion_tokens") or 0)
+    total_tokens = int(usage.get("total_tokens") or (prompt_tokens + completion_tokens))
+    purpose = str(usage.get("purpose") or "unknown").strip() or "unknown"
+    step = usage.get("step")
+    source = str(usage.get("source") or "estimated").strip() or "estimated"
+
+    call_record = {
+        "step": step,
+        "purpose": purpose,
+        "model": usage.get("model"),
+        "source": source,
+        "estimated": bool(usage.get("estimated", source != "official")),
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+    state.llm_calls.append(call_record)
+
+    totals = state.token_usage.setdefault("totals", _empty_usage_bucket())
+    totals["prompt_tokens"] += prompt_tokens
+    totals["completion_tokens"] += completion_tokens
+    totals["total_tokens"] += total_tokens
+    totals["call_count"] += 1
+
+    by_purpose = state.token_usage.setdefault("by_purpose", {})
+    purpose_bucket = by_purpose.setdefault(purpose, _empty_usage_bucket())
+    purpose_bucket["prompt_tokens"] += prompt_tokens
+    purpose_bucket["completion_tokens"] += completion_tokens
+    purpose_bucket["total_tokens"] += total_tokens
+    purpose_bucket["call_count"] += 1
+
+    if step is not None:
+        step_key = str(step)
+        by_step = state.token_usage.setdefault("by_step", {})
+        step_bucket = by_step.setdefault(step_key, _empty_usage_bucket())
+        step_bucket["prompt_tokens"] += prompt_tokens
+        step_bucket["completion_tokens"] += completion_tokens
+        step_bucket["total_tokens"] += total_tokens
+        step_bucket["call_count"] += 1
+
+    sources = state.token_usage.setdefault(
+        "sources",
+        {"official_call_count": 0, "estimated_call_count": 0},
+    )
+    if source == "official":
+        sources["official_call_count"] += 1
+    else:
+        sources["estimated_call_count"] += 1
+
+
 def build_result_payload(state: Any) -> dict:
     tagged_raw = ensure_answer_tagged(state.draft_answer)
     plain = extract_tag_content(tagged_raw, ANSWER_TAG)
@@ -571,4 +635,6 @@ def build_result_payload(state: Any) -> dict:
         "sources": state.sources,
         "read_sources": getattr(state, "read_sources", []),
         "reflections": state.reflections,
+        "token_usage": getattr(state, "token_usage", {}),
+        "llm_calls": getattr(state, "llm_calls", []),
     }

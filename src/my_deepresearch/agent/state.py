@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from dataclasses import dataclass, field
 
@@ -19,5 +19,20 @@ class ResearchState:
     failed_urls: set[str] = field(default_factory=set)
     backup_queries: set[str] = field(default_factory=set)
     pending_read_urls: list[str] = field(default_factory=list)
+    llm_calls: list[dict] = field(default_factory=list)
+    token_usage: dict = field(default_factory=lambda: {
+        "totals": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "call_count": 0,
+        },
+        "by_purpose": {},
+        "by_step": {},
+        "sources": {
+            "official_call_count": 0,
+            "estimated_call_count": 0,
+        },
+    })
     confidence: float = 0.0
     draft_answer: str = ""

@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
 from ..llm_client import LLMClient
 from ..prompts import REFLECT_SYSTEM_PROMPT
 from .state import ResearchState
-from .utils import clamp_confidence, dedupe_keep_order, extract_json_block
+from .utils import clamp_confidence, dedupe_keep_order, extract_json_block, record_llm_usage
 
 
 def reflect_step(
@@ -18,7 +18,7 @@ def reflect_step(
     user_prompt = (
         "请评估最新一步是否让研究达到可收敛状态。\n"
         "评估标准：相关性、可信度、完整性、时效性。\n"
-        "请返回严格 JSON（字段名必须保持英文）:\n"
+        "请返回严格 JSON（字段名必须保持英文）：\n"
         "{\n"
         '  "step": 0,\n'
         '  "is_sufficient": false,\n'
@@ -33,7 +33,13 @@ def reflect_step(
         f"Recent notes: {json.dumps(state.notes[-5:], ensure_ascii=False)}\n"
         f"Recent sources: {json.dumps(state.sources[-5:], ensure_ascii=False)}"
     )
-    raw = llm.chat(REFLECT_SYSTEM_PROMPT, user_prompt)
+    response = llm.chat(
+        REFLECT_SYSTEM_PROMPT,
+        user_prompt,
+        usage_context={"purpose": "reflector", "step": step_id},
+    )
+    record_llm_usage(state, response["usage"])
+    raw = response["content"]
     reflection = extract_json_block(raw)
     reflection["step"] = int(reflection.get("step") or step_id)
     reflection["is_sufficient"] = bool(reflection.get("is_sufficient", False))
